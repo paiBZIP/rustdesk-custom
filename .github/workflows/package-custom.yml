@@ -43,29 +43,42 @@ jobs:
           flutter-version: "3.22.3"
           cache: true
 
+      - name: Cache cargo tools
+        id: cache-cargo-tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-expand
+            ~/.cargo/bin/flutter_rust_bridge_codegen
+          key: cargo-bridge-tools-${{ env.CARGO_EXPAND_VERSION }}-${{ env.FLUTTER_RUST_BRIDGE_VERSION }}
+
       - name: Install flutter rust bridge deps
         shell: bash
         run: |
-          cargo install cargo-expand --version ${{ env.CARGO_EXPAND_VERSION }} --locked
-          cargo install flutter_rust_bridge_codegen --version ${{ env.FLUTTER_RUST_BRIDGE_VERSION }} --features "uuid" --locked
+          if [ "${{ steps.cache-cargo-tools.outputs.cache-hit }}" != "true" ]; then
+            cargo install cargo-expand --version ${{ env.CARGO_EXPAND_VERSION }} --locked
+            cargo install flutter_rust_bridge_codegen --version ${{ env.FLUTTER_RUST_BRIDGE_VERSION }} --features "uuid" --locked
+          fi
           sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' flutter/pubspec.yaml
           pushd flutter && flutter pub get && popd
 
-      - name: Generate bridge
+      - name: Run flutter rust bridge
         shell: bash
         run: |
-          python3 flutter/lib/bridge_generated.py
-          pushd flutter && flutter pub run build_runner build --delete-conflicting-outputs && popd
+          ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+          cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
 
       - name: Upload bridge artifact
         uses: actions/upload-artifact@v4
         with:
           name: bridge-artifact
           path: |
-            flutter/lib/generated_bridge.dart
-            flutter/lib/generated_bridge.freezed.dart
-            src/bridge_generated.rs
-            src/bridge_generated.io.rs
+            ./src/bridge_generated.rs
+            ./src/bridge_generated.io.rs
+            ./flutter/lib/generated_bridge.dart
+            ./flutter/lib/generated_bridge.freezed.dart
+            ./flutter/macos/Runner/bridge_generated.h
+            ./flutter/ios/Runner/bridge_generated.h
 
   # 2. Windows 輔助元件
   build-topmost-window:
@@ -108,7 +121,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: topmostwindow-artifacts-x64
-          path: ./rustdesk
+          path: ./temp-topmost
 
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v2
@@ -121,6 +134,18 @@ jobs:
           channel: "stable"
           flutter-version: ${{ env.FLUTTER_VERSION }}
           architecture: x64
+
+      - name: Replace engine with rustdesk custom flutter engine
+        shell: powershell
+        run: |
+          flutter doctor -v
+          flutter precache --windows
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          $flutterPath = (Get-Command flutter).Source
+          $flutterBin = Split-Path (Split-Path $flutterPath)
+          $engineDir = Join-Path $flutterBin "cache\artifacts\engine\windows-x64-release"
+          Copy-Item windows-x64-release\* $engineDir -Force
 
       - name: Patch flutter
         shell: bash
@@ -152,10 +177,20 @@ jobs:
       - name: Package Windows portable & setup
         shell: powershell
         run: |
-          Copy-Item target\release\rustdesk.exe rustdesk\rustdesk.exe -Force
-          python3 res\inline-extra.py
+          if (Test-Path "temp-topmost\WindowInjection.dll") {
+            Copy-Item "temp-topmost\WindowInjection.dll" "flutter\build\windows\x64\runner\Release\WindowInjection.dll" -Force
+          }
+          pip3 install brotli
+          pushd libs\portable
+          pip3 install -r requirements.txt
+          python3 .\generate.py -f ..\..\flutter\build\windows\x64\runner\Release -o . -e ..\..\flutter\build\windows\x64\runner\Release\rustdesk.exe
+          popd
           New-Item -ItemType Directory -Force -Path output
-          Copy-Item rustdesk\rustdesk.exe output\rustdesk-${{ env.VERSION }}-x86_64.exe -Force
+          if (Test-Path "target\release\rustdesk-portable-packer.exe") {
+            Copy-Item target\release\rustdesk-portable-packer.exe output\rustdesk-${{ env.VERSION }}-x86_64.exe -Force
+          } elseif (Test-Path "libs\portable\target\release\rustdesk-portable-packer.exe") {
+            Copy-Item libs\portable\target\release\rustdesk-portable-packer.exe output\rustdesk-${{ env.VERSION }}-x86_64.exe -Force
+          }
 
       - name: Upload Windows Output
         uses: actions/upload-artifact@v4
@@ -257,6 +292,11 @@ jobs:
         run: |
           cd $(dirname $(dirname $(which flutter)))
           git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff || true
+
+      - name: Workaround for flutter issue
+        run: |
+          cd "$(dirname "$(which flutter)")"
+          sed -i -e 's/_setFramesEnabledState(false);/\/\/_setFramesEnabledState(false);/g' ../packages/flutter/lib/src/scheduler/binding.dart
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
