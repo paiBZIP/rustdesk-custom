@@ -70,26 +70,28 @@ jobs:
   # 2. Windows 輔助元件
   build-topmost-window:
     runs-on: windows-2022
+    continue-on-error: true
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@v2
 
-      - name: Build TopMostWindow
+      - name: Clone and build WindowInjection
+        shell: powershell
         run: |
-          msbuild res\RustDeskTempTopMostWindow\RustDeskTempTopMostWindow.vcxproj -property:Configuration=Release -property:Platform=x64
+          git clone https://github.com/rustdesk-org/RustDeskTempTopMostWindow RustDeskTempTopMostWindow
+          cd RustDeskTempTopMostWindow
+          git checkout ecd8d6a139eee76845ea66423fb739af450fda90
+          msbuild WindowInjection\WindowInjection.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TargetVersion=Windows10
 
       - name: Upload TopMostWindow artifact
         uses: actions/upload-artifact@v4
         with:
           name: topmostwindow-artifacts-x64
-          path: res\RustDeskTempTopMostWindow\x64\Release\RustDeskTempTopMostWindow.exe
+          path: RustDeskTempTopMostWindow/WindowInjection/x64/Release/WindowInjection.dll
 
   # 3. 打包 Windows 版本 (.exe)
   build-windows:
-    needs: [generate-bridge, build-topmost-window]
+    needs: [generate-bridge]
     runs-on: windows-2022
     steps:
       - name: Checkout source code
@@ -102,6 +104,7 @@ jobs:
           path: ./
 
       - name: Restore TopMostWindow
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: topmostwindow-artifacts-x64
