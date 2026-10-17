@@ -1555,14 +1555,14 @@ impl Client {
                 config::DEFAULT_RELAY_SERVER.to_owned()
             }
         } else {
-            relay_server
+            relay_server.to_string()
         };
         if (interface.is_force_relay() && typ != "WebRTC") || conn.is_err() {
             if !relay_server.is_empty() {
                 let switch_code = interface.get_switch_code();
                 conn = Self::request_relay(
                     peer_id,
-                    relay_server.to_owned(),
+                    relay_server.clone(),
                     rendezvous_server,
                     !signed_id_pk.is_empty(),
                     key,
