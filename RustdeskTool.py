@@ -27,6 +27,7 @@ import urllib.error
 
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
+import queue
 
 # Windows 高 DPI 支援
 try:
@@ -96,9 +97,11 @@ class RustdeskToolApp(tk.Tk):
         self.github_token = get_git_token()
         self.monitoring_thread = None
         self.stop_monitoring_flag = False
+        self.msg_queue = queue.Queue()
 
         self._setup_style()
         self._build_ui()
+        self._poll_queue()
         self.reload_config()
 
     def _setup_style(self):
@@ -291,19 +294,49 @@ class RustdeskToolApp(tk.Tk):
         status_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
     # ----------------------------------------------------
-    # 日誌輔助函式
+    # 執行緒安全之訊息佇列 (Thread-Safe Message Queue)
     # ----------------------------------------------------
+    def _poll_queue(self):
+        try:
+            while True:
+                msg = self.msg_queue.get_nowait()
+                kind = msg[0]
+                if kind == "log":
+                    _, text, tag = msg
+                    ts = datetime.now().strftime("[%H:%M:%S] ")
+                    self.log_text.insert(tk.END, ts, "TIMESTAMP")
+                    self.log_text.insert(tk.END, f"{text}\n", tag)
+                    self.log_text.see(tk.END)
+                elif kind == "status":
+                    _, text = msg
+                    self.status_var.set(f"狀態：{text}")
+                elif kind == "btn":
+                    _, btn, state = msg
+                    btn.config(state=state)
+                elif kind == "call":
+                    _, func, args, kwargs = msg
+                    func(*args, **kwargs)
+        except queue.Empty:
+            pass
+        except Exception:
+            pass
+        finally:
+            self.after(50, self._poll_queue)
+
     def log(self, text, tag="INFO"):
-        ts = datetime.now().strftime("[%H:%M:%S] ")
-        self.log_text.insert(tk.END, ts, "TIMESTAMP")
-        self.log_text.insert(tk.END, f"{text}\n", tag)
-        self.log_text.see(tk.END)
+        self.msg_queue.put(("log", text, tag))
 
     def clear_log(self):
         self.log_text.delete("1.0", tk.END)
 
     def set_status(self, text):
-        self.status_var.set(f"狀態：{text}")
+        self.msg_queue.put(("status", text))
+
+    def set_btn_state(self, btn, state):
+        self.msg_queue.put(("btn", btn, state))
+
+    def run_on_main(self, func, *args, **kwargs):
+        self.msg_queue.put(("call", func, args, kwargs))
 
     # ----------------------------------------------------
     # 設定讀取與寫入
@@ -488,7 +521,7 @@ class RustdeskToolApp(tk.Tk):
         commit_msg = self.entry_commit_msg.get().strip() or "更新 RustDesk 設定"
 
         def _worker():
-            self.btn_push_build.config(state=tk.DISABLED)
+            self.set_btn_state(self.btn_push_build, tk.DISABLED)
             self.set_status("正在執行 Git Commit & Push...")
             self.log("=" * 60, "INFO")
             self.log("🚀 開始執行一鍵上傳與打包流程...", "INFO")
@@ -525,7 +558,7 @@ class RustdeskToolApp(tk.Tk):
                 self.log(f"執行上傳打包發生異常: {e}", "ERROR")
                 self.set_status("上傳打包失敗")
             finally:
-                self.btn_push_build.config(state=tk.NORMAL)
+                self.set_btn_state(self.btn_push_build, tk.NORMAL)
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -594,7 +627,7 @@ class RustdeskToolApp(tk.Tk):
                             self.log(f"網址: {html_url}", "SUCCESS")
                             self.set_status("雲端打包成功！可一鍵下載安裝包")
                             # 詢問是否立即下載
-                            self.after(500, lambda: self.prompt_download_after_build())
+                            self.run_on_main(self.prompt_download_after_build)
                         else:
                             self.log(f"❌ 雲端打包結束，結果為: {conclusion}", "ERROR")
                             self.set_status(f"打包失敗 ({conclusion})")
