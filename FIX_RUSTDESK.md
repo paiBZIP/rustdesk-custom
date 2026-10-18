@@ -171,5 +171,32 @@ git push origin main
 
 ---
 
+## 6. 視窗型圖形管理工具 (RustdeskTool.py)
+
+為了方便日後快速查看、修改金鑰與伺服器，並實現一鍵推送與雲端打包，專案內附有專屬圖形介面工具：
+
+### 啟動方式
+- **方式一（最快）**：直接雙擊執行目錄下的 [`啟動工具.bat`](file:///c:/Users/Bzip/Desktop/rustdesk-master/啟動工具.bat) 或 [`RustdeskTool.bat`](file:///c:/Users/Bzip/Desktop/rustdesk-master/RustdeskTool.bat)。
+- **方式二**：在終端機執行：
+  ```bash
+  python RustdeskTool.py
+  ```
+
+### 主要功能
+1. **快速查看 / 修改**：
+   - **Public Key（金鑰）**：支援一鍵複製、隨機產生 32-byte Ed25519 金鑰。
+   - **ID 伺服器**：預設 `vpn.xbmax.com`，附有 **「⚡ 測試連線 (21116)」** 實時端口連通性檢測。
+   - **中繼伺服器**：預設 `vpn.xbmax.com`，附有 **「⚡ 測試連線 (21117)」** 檢測。
+   - **版本號**：儲存時自動同步更新 `Cargo.toml`、`pubspec.yaml`、`libs/portable/Cargo.toml` 與 CI 腳本。
+2. **一鍵儲存並上傳 GitHub（自動觸發雲端打包）**：
+   - 點擊 **「🚀 一鍵儲存並上傳 GitHub」** 按鈕，工具會自動儲存設定、建立 Git Commit、Push 至 GitHub 儲存庫。
+   - GitHub Actions 偵測到 Push 後立即啟動雲端編譯流程。
+3. **即時監控雲端編譯狀態**：
+   - 工具會透過 GitHub API 實時顯示各 Job（Windows / Ubuntu / Mac MINI）的即時進度。
+4. **一鍵下載最新安裝包至 OUT**：
+   - 編譯完成後，點擊 **「📥 下載最新安裝包至 OUT」**，工具會自動下載 `OUT` 產物並解壓縮至本地 `OUT/` 資料夾，隨後自動開啟檔案總管。
+
+---
+
 *文檔建立時間：2026-10-18*
 *紀錄標記：FIX_RUSTDESK*
