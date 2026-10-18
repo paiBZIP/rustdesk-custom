@@ -38,9 +38,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_RS_PATH = os.path.join(BASE_DIR, "libs", "hbb_common", "src", "config.rs")
 
 # 預設參數 (若讀不到檔案時之預設值)
-DEFAULT_ID_SERVER = "vpn.xbmax.com"
-DEFAULT_RELAY_SERVER = "vpn.xbmax.com"
-DEFAULT_PUB_KEY = "k09QlRj3SkGwORP6Kg39KkOpRdbXGfoz3LN9QzfzXpk="
+DEFAULT_ID_SERVER = ""
+DEFAULT_RELAY_SERVER = ""
+DEFAULT_PUB_KEY = ""
 DEFAULT_BENCHMARK_PORT = 21120
 
 
@@ -55,13 +55,15 @@ def read_config_defaults():
             with open(CONFIG_RS_PATH, "r", encoding="utf-8") as f:
                 content = f.read()
             m_key = re.search(r'pub const RS_PUB_KEY: &str = "(.*?)";', content)
-            m_id = re.search(r'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\["(.*?)"\];', content)
+            m_id = re.search(r'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[(?:"(.*?)")?\];', content)
             m_relay = re.search(r'pub const DEFAULT_RELAY_SERVER: &str = "(.*?)";', content)
 
             if m_key:
                 pub_key = m_key.group(1)
-            if m_id:
+            if m_id and m_id.group(1):
                 id_server = m_id.group(1)
+            elif m_id:
+                id_server = ""
             if m_relay:
                 relay_server = m_relay.group(1)
         except Exception:

@@ -225,6 +225,9 @@ class RustdeskToolApp(tk.Tk):
         btn_reload = ttk.Button(cfg_btn_bar, text="🔄 重新載入設定", style="Action.TButton", command=self.reload_config)
         btn_reload.pack(side=tk.LEFT, padx=(0, 6))
 
+        btn_clear = ttk.Button(cfg_btn_bar, text="🧹 清空金鑰與伺服器", style="Action.TButton", command=self.clear_server_fields)
+        btn_clear.pack(side=tk.LEFT, padx=(0, 6))
+
         btn_save = ttk.Button(cfg_btn_bar, text="💾 儲存修改至本機檔案", style="Success.TButton", command=self.save_config)
         btn_save.pack(side=tk.LEFT)
 
@@ -341,6 +344,13 @@ class RustdeskToolApp(tk.Tk):
     # ----------------------------------------------------
     # 設定讀取與寫入
     # ----------------------------------------------------
+    def clear_server_fields(self):
+        """清空金鑰與伺服器輸入欄位"""
+        self.entry_key.delete(0, tk.END)
+        self.entry_id.delete(0, tk.END)
+        self.entry_relay.delete(0, tk.END)
+        self.log("已清空金鑰與伺服器輸入欄位（點擊『儲存修改』即可寫入檔案）", "WARN")
+
     def reload_config(self):
         """讀取檔案設定並填入輸入框"""
         try:
@@ -352,11 +362,11 @@ class RustdeskToolApp(tk.Tk):
                 content = f.read()
 
             pub_key_m = re.search(r'pub const RS_PUB_KEY: &str = "(.*?)";', content)
-            id_server_m = re.search(r'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\["(.*?)"\];', content)
+            id_server_m = re.search(r'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[(?:"(.*?)")?\];', content)
             relay_server_m = re.search(r'pub const DEFAULT_RELAY_SERVER: &str = "(.*?)";', content)
 
             pub_key = pub_key_m.group(1) if pub_key_m else ""
-            id_server = id_server_m.group(1) if id_server_m else ""
+            id_server = (id_server_m.group(1) if id_server_m and id_server_m.group(1) else "")
             relay_server = relay_server_m.group(1) if relay_server_m else ""
 
             # 讀取版本號
@@ -392,15 +402,6 @@ class RustdeskToolApp(tk.Tk):
         relay_server = self.entry_relay.get().strip()
         version = self.entry_ver.get().strip()
 
-        if not pub_key:
-            messagebox.showwarning("警告", "Public Key 不能為空！")
-            return False
-        if not id_server:
-            messagebox.showwarning("警告", "ID 伺服器不能為空！")
-            return False
-        if not relay_server:
-            messagebox.showwarning("警告", "中繼伺服器不能為空！")
-            return False
         if not version:
             messagebox.showwarning("警告", "版本號不能為空！")
             return False
@@ -412,8 +413,9 @@ class RustdeskToolApp(tk.Tk):
 
             content = re.sub(r'pub const RS_PUB_KEY: &str = ".*?";',
                              f'pub const RS_PUB_KEY: &str = "{pub_key}";', content)
-            content = re.sub(r'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[".*?"\];',
-                             f'pub const RENDEZVOUS_SERVERS: &[&str] = &["{id_server}"];', content)
+            rendezvous_line = f'pub const RENDEZVOUS_SERVERS: &[&str] = &["{id_server}"];' if id_server else 'pub const RENDEZVOUS_SERVERS: &[&str] = &[];'
+            content = re.sub(r'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*?\];',
+                             rendezvous_line, content)
             content = re.sub(r'pub const DEFAULT_RELAY_SERVER: &str = ".*?";',
                              f'pub const DEFAULT_RELAY_SERVER: &str = "{relay_server}";', content)
 
