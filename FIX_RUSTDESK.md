@@ -169,6 +169,17 @@ git push origin main
 - **問題**：GitHub Actions macOS 執行時 `./build.py: Permission denied`。
 - **解法**：將 `build.py` 權限更新為 `100755`，並使用 `python3 ./build.py ...` 明確指定 Python 直譯器呼叫。
 
+### ⑧ 伺服器與金鑰設定架構排查（Single Source of Truth 原則）
+- **核心排查確認**：整個專案中，所有的 Public Key（金鑰）、ID 伺服器（Rendezvous Server）與中繼伺服器（Relay Server）的唯一核心源頭均為 [`libs/hbb_common/src/config.rs`](file:///c:/Users/Bzip/Desktop/rustdesk-master/libs/hbb_common/src/config.rs)。
+- **各模組引用關係**：
+  - **Public Key**：在 [`src/common.rs`](file:///c:/Users/Bzip/Desktop/rustdesk-master/src/common.rs)（L2123）與 [`src/client.rs`](file:///c:/Users/Bzip/Desktop/rustdesk-master/src/client.rs)（L1670, L2934）中，使用者介面留空時皆直接調用 `config::RS_PUB_KEY`。
+  - **ID 伺服器**：在 [`libs/hbb_common/src/config.rs`](file:///c:/Users/Bzip/Desktop/rustdesk-master/libs/hbb_common/src/config.rs)（L964）`Config::get_rendezvous_servers()` 與 [`src/client.rs`](file:///c:/Users/Bzip/Desktop/rustdesk-master/src/client.rs)（L478）中，介面留空時直接回傳 `RENDEZVOUS_SERVERS`。
+  - **中繼伺服器**：在 [`src/rendezvous_mediator.rs`](file:///c:/Users/Bzip/Desktop/rustdesk-master/src/rendezvous_mediator.rs)（L1330）、[`src/client.rs`](file:///c:/Users/Bzip/Desktop/rustdesk-master/src/client.rs)（L1555）與 [`libs/hbb_common/src/websocket.rs`](file:///c:/Users/Bzip/Desktop/rustdesk-master/libs/hbb_common/src/websocket.rs)（L490）中，皆指向 `config::DEFAULT_RELAY_SERVER`。
+- **維護結論**：日後修改金鑰或伺服器，**只需修改 `config.rs` 第 117～119 行（或直接使用 `RustdeskTool.py` / `啟動工具.bat` 一鍵修改）**，其餘模組會自動繼承，不需要在程式碼中重複硬編碼字串。
+- **本機舊設定檔排查說明**：
+  - 若在曾手動輸入過舊伺服器的本機測試，Windows 會將設定儲存於 `%APPDATA%\RustDesk\config\RustDesk2.toml`。
+  - 只要將設定介面中的 ID/中繼/金鑰欄位**保持空白（清空）**，或在全新電腦安裝，客戶端便會 100% 套用 `config.rs` 內建的預設金鑰與伺服器。
+
 ---
 
 ## 6. 視窗型圖形管理工具 (RustdeskTool.py)
