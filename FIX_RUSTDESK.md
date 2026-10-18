@@ -209,5 +209,49 @@ git push origin main
 
 ---
 
+## 7. 網路通訊埠檢測與雙機極限測速工具 (Speed.py)
+
+專案內附有專屬的網路質量檢測與雙機端到端實測工具 [`Speed.py`](file:///c:/Users/Bzip/Desktop/rustdesk-master/Speed.py)，可協助排查連線速度與頻寬瓶頸：
+
+### 啟動方式
+- **方式一（雙擊啟動）**：雙擊 [`測速診斷.bat`](file:///c:/Users/Bzip/Desktop/rustdesk-master/測速診斷.bat) 或 [`Speed.bat`](file:///c:/Users/Bzip/Desktop/rustdesk-master/Speed.bat)。
+- **方式二**：在終端機執行：
+  ```bash
+  python Speed.py
+  ```
+
+### 核心功能
+1. **🌐 伺服器通訊埠與延遲診斷**：
+   - 自動帶入 `config.rs` 預設的 ID / 中繼伺服器（`vpn.xbmax.com`）。
+   - 一鍵掃描測試 RustDesk 全套 5 組核心通訊埠：
+     - `21115` TCP：NAT 類型探測 (hbbs)
+     - `21116` TCP：ID 註冊與信令協商 (hbbs)
+     - `21116` UDP：心跳與打洞探針 (hbbs)
+     - `21117` TCP：中繼資料傳輸 (hbbr)
+     - `21118` TCP：WebSocket ID 服務
+     - `21119` TCP：WebSocket 中繼服務
+   - 測量各通訊埠的精確 RTT 延遲（ms）與連通性狀態。
+
+2. **🚀 A 電腦 ↔ B 電腦 雙機頻寬實測**：
+   - 兩台電腦同時開啟 `Speed.py`。
+   - **角色 A（等待端）**：點擊「🎧 啟動等待連線 (Listen)」，顯示本機 LAN IP 與公網 IP，設定連線密碼。
+   - **角色 B（發起端）**：輸入角色 A 的 IP、通訊埠與密碼，點擊「🚀 開始雙向極限測速」。
+   - **自動執行流程**：
+     - 安全 SHA-256 挑戰握手認證（防止未授權連線）。
+     - 10 回合 Ping 探針計算最小/平均/最大延遲與網路抖動（Jitter）。
+     - 上傳實測（Client ➔ Server 實體數據串流）。
+     - 下載實測（Server ➔ Client 實體數據串流）。
+     - 即時於儀表板呈現上傳/下載頻寬（Mbps / MB/s）。
+
+3. **📊 各解析度畫質與操作反應模擬**：
+   - 根據測得的實體頻寬與延遲，自動試算在 720p / 1080p 30FPS / 1080p 60FPS / 2K 60FPS / 4K 60FPS 下的綜合評級。
+   - 評估三種畫質優先級：
+     - 🚀 **速度優先 (Speed)**：0.5x 位元率，最少延遲。
+     - ⚖️ **均衡模式 (Balanced)**：0.67x 位元率，預設最佳體驗。
+     - 🎨 **畫質優先 (Quality)**：1.5x~4.0x 位元率，高清晰度。
+   - 評估真實滑鼠操作反饋延遲（Input Lag = 網路 RTT + 編碼延遲 + 解碼渲染延遲），並給出專業的優化配置建議。
+
+---
+
 *文檔建立時間：2026-10-18*
 *紀錄標記：FIX_RUSTDESK*
