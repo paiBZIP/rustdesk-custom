@@ -172,20 +172,32 @@ class SpeedTestApp(tk.Tk):
         self.card_bg = "#FFFFFF"
         self.configure(bg=self.bg_color)
 
-        self.style.configure(".", background=self.bg_color, font=("Segoe UI", 9))
-        self.style.configure("TLabelframe", background=self.card_bg, font=("Segoe UI", 10, "bold"))
-        self.style.configure("TLabelframe.Label", background=self.card_bg, font=("Segoe UI", 10, "bold"))
+        font_family = "Microsoft JhengHei UI" if sys.platform == "win32" else "Segoe UI"
+
+        self.style.configure(".", background=self.bg_color, font=(font_family, 9))
+        self.style.configure("TLabelframe", background=self.card_bg, font=(font_family, 10, "bold"))
+        self.style.configure("TLabelframe.Label", background=self.card_bg, font=(font_family, 10, "bold"))
         self.style.configure("TNotebook", background=self.bg_color)
-        self.style.configure("TNotebook.Tab", font=("Segoe UI", 9, "bold"), padding=[12, 6])
+        self.style.configure("TNotebook.Tab", font=(font_family, 9, "bold"), padding=[14, 6])
+
+        # Treeview 核心行高與間距修復 (徹底解決 Windows 中文與高 DPI 下文字重疊擠壓問題)
+        self.style.configure("Treeview",
+                             font=(font_family, 10),
+                             rowheight=34,
+                             background="#FFFFFF",
+                             fieldbackground="#FFFFFF")
+        self.style.configure("Treeview.Heading",
+                             font=(font_family, 9, "bold"),
+                             padding=[6, 6])
 
         # 按鈕樣式
-        self.style.configure("Primary.TButton", font=("Segoe UI", 9, "bold"), background="#2563EB", foreground="#FFFFFF")
+        self.style.configure("Primary.TButton", font=(font_family, 9, "bold"), background="#2563EB", foreground="#FFFFFF")
         self.style.map("Primary.TButton", background=[("active", "#1D4ED8"), ("disabled", "#CBD5E1")])
 
-        self.style.configure("Success.TButton", font=("Segoe UI", 9, "bold"), background="#16A34A", foreground="#FFFFFF")
+        self.style.configure("Success.TButton", font=(font_family, 9, "bold"), background="#16A34A", foreground="#FFFFFF")
         self.style.map("Success.TButton", background=[("active", "#15803D"), ("disabled", "#CBD5E1")])
 
-        self.style.configure("Action.TButton", font=("Segoe UI", 9), background="#F1F5F9", foreground="#1E293B")
+        self.style.configure("Action.TButton", font=(font_family, 9), background="#F1F5F9", foreground="#1E293B")
         self.style.map("Action.TButton", background=[("active", "#E2E8F0")])
 
     def _build_ui(self):
@@ -194,42 +206,42 @@ class SpeedTestApp(tk.Tk):
         header.pack(fill=tk.X, side=tk.TOP)
 
         t_lbl = tk.Label(header, text="⚡ RustDesk 網路質量、通訊埠檢測與雙機極限測速 (Speed.py)",
-                         font=("Segoe UI", 13, "bold"), fg="#FFFFFF", bg="#1E293B")
+                         font=("Microsoft JhengHei UI", 13, "bold"), fg="#FFFFFF", bg="#1E293B")
         t_lbl.pack(anchor="w", padx=20, pady=(10, 2))
 
         sub_lbl = tk.Label(header,
                            text=f"ID 伺服器: {self.id_server_val} ｜ 中繼: {self.relay_server_val} ｜ 金鑰: {self.pub_key_val[:16]}...",
-                           font=("Segoe UI", 9), fg="#94A3B8", bg="#1E293B")
+                           font=("Microsoft JhengHei UI", 9), fg="#94A3B8", bg="#1E293B")
         sub_lbl.pack(anchor="w", padx=20, pady=(0, 10))
 
-        # 頁籤容器
+        # 頁籤容器 (標籤文字適度精簡，防止右側擠壓溢出)
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
         # Tab 1: 伺服器通訊埠與延遲檢測
         self.tab_server = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.tab_server, text="  🌐 1. 伺服器通訊埠與延遲診斷  ")
+        self.notebook.add(self.tab_server, text="  🌐 伺服器通訊埠診斷  ")
         self._build_tab_server(self.tab_server)
 
         # Tab 2: A 電腦 ↔ B 電腦 雙機實測
         self.tab_p2p = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.tab_p2p, text="  🚀 2. A 電腦 ↔ B 電腦 雙機頻寬實測  ")
+        self.notebook.add(self.tab_p2p, text="  🚀 雙機頻寬實測  ")
         self._build_tab_p2p(self.tab_p2p)
 
         # Tab 3: 解析度畫質與操作反應模擬
         self.tab_sim = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.tab_sim, text="  📊 3. 解析度畫質與操作反應模擬  ")
+        self.notebook.add(self.tab_sim, text="  📊 解析度畫質模擬  ")
         self._build_tab_sim(self.tab_sim)
 
         # Tab 4: 即時日誌終端
         self.tab_log = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.tab_log, text="  📜 4. 詳細執行日誌  ")
+        self.notebook.add(self.tab_log, text="  📜 執行日誌  ")
         self._build_tab_log(self.tab_log)
 
         # 底部狀態列
         self.status_var = tk.StringVar(value="狀態：就緒")
         status_bar = tk.Label(self, textvariable=self.status_var, relief=tk.SUNKEN, anchor="w",
-                              bg="#E2E8F0", fg="#334155", font=("Segoe UI", 9), padx=10, pady=3)
+                              bg="#E2E8F0", fg="#334155", font=("Microsoft JhengHei UI", 9), padx=10, pady=3)
         status_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
     # ----------------------------------------------------
@@ -248,9 +260,9 @@ class SpeedTestApp(tk.Tk):
                                   command=self.run_server_port_diagnostics)
         btn_test_all.pack(side=tk.LEFT, ipady=2)
 
-        # 樹狀表格呈現各埠號檢測結果
+        # 樹狀表格呈現各埠號檢測結果 (共 6 筆，設定 height=6)
         columns = ("port", "proto", "name", "desc", "status", "ping")
-        self.tree_ports = ttk.Treeview(parent, columns=columns, show="headings", height=8)
+        self.tree_ports = ttk.Treeview(parent, columns=columns, show="headings", height=6)
 
         self.tree_ports.heading("port", text="埠號 (Port)")
         self.tree_ports.heading("proto", text="協議")
@@ -394,7 +406,7 @@ class SpeedTestApp(tk.Tk):
                  font=("Segoe UI", 9, "bold"), fg="#1E293B", bg=self.bg_color).pack(anchor="w", pady=(0, 8))
 
         columns = ("res", "fps", "bitrate_req", "speed_mode", "balanced_mode", "quality_mode", "input_lag")
-        self.tree_sim = ttk.Treeview(parent, columns=columns, show="headings", height=8)
+        self.tree_sim = ttk.Treeview(parent, columns=columns, show="headings", height=5)
 
         self.tree_sim.heading("res", text="通用解析度")
         self.tree_sim.heading("fps", text="目標 FPS")
