@@ -226,7 +226,7 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y libunwind-dev libpulse-dev libasound2-dev
-          sudo apt-get install -y clang cmake curl gcc git g++ libclang-dev libgtk-3-dev llvm-dev nasm ninja-build pkg-config wget libxdo-dev libayatana-appindicator3-dev libva-dev libvdpau-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libpam0g-dev
+          sudo apt-get install -y clang cmake curl gcc git g++ libclang-dev libgtk-3-dev llvm-dev nasm ninja-build pkg-config wget libxdo-dev libayatana-appindicator3-dev libva-dev libvdpau-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libpam0g-dev libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxfixes-dev
 
       - name: Install flutter
         uses: subosito/flutter-action@v2
@@ -354,20 +354,24 @@ jobs:
   package-all-out:
     needs: [build-windows, build-ubuntu, build-macmini]
     runs-on: ubuntu-latest
+    if: always()
     steps:
       - name: Download Windows Artifacts
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: windows-output
           path: OUT/
 
       - name: Download Ubuntu Artifacts
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: ubuntu-output
           path: OUT/
 
       - name: Download Mac MINI Artifacts
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: macmini-output
