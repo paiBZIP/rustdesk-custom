@@ -779,6 +779,7 @@ def build_flutter_deb(version, features):
     if ships_so:
         retarget_control_to_drm_variant()
     system2('cp -a ../res/DEBIAN/* tmpdeb/DEBIAN/')
+    system2('chmod 755 tmpdeb/DEBIAN/*')
     md5_file_folder("tmpdeb/")
     system2('dpkg-deb -b tmpdeb rustdesk.deb;')
 

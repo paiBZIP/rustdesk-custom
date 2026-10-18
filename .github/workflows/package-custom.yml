@@ -256,6 +256,7 @@ jobs:
 
       - name: Build Ubuntu deb package
         run: |
+          chmod -R 755 res/DEBIAN
           python3 ./build.py --flutter --hwcodec --unix-file-copy-paste
 
       - name: Collect Ubuntu Deb
