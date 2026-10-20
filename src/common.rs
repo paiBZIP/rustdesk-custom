@@ -1256,6 +1256,9 @@ fn get_api_server_(api: String, custom: String) -> String {
             return format!("http://{}", s);
         }
     }
+    if !config::DEFAULT_API_SERVER.is_empty() {
+        return config::DEFAULT_API_SERVER.to_owned();
+    }
     "https://admin.rustdesk.com".to_owned()
 }
 

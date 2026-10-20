@@ -114,9 +114,10 @@ const CHARS: &[char] = &[
     'm', 'n', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
 ];
 
-pub const RENDEZVOUS_SERVERS: &[&str] = &[];
-pub const RS_PUB_KEY: &str = "";
-pub const DEFAULT_RELAY_SERVER: &str = "";
+pub const RENDEZVOUS_SERVERS: &[&str] = &["vpn.xbmax.com"];
+pub const RS_PUB_KEY: &str = "k09QlRj3SkGwORP6Kg39KkOpRdbXGfoz3LN9QzfzXpk=";
+pub const DEFAULT_RELAY_SERVER: &str = "vpn.xbmax.com";
+pub const DEFAULT_API_SERVER: &str = "http://vpn.xbmax.com:21114";
 
 pub const RENDEZVOUS_PORT: i32 = 21116;
 pub const RELAY_PORT: i32 = 21117;

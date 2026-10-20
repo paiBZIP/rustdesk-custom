@@ -205,16 +205,27 @@ class RustdeskToolApp(tk.Tk):
                                     command=lambda: self.test_server_port(self.entry_relay.get().strip(), 21117, "中繼伺服器"))
         btn_test_relay.grid(row=3, column=2, sticky="w", pady=4)
 
-        # 4. 版本號
+        # 4. API 伺服器
+        lbl_api = tk.Label(grid, text="API 伺服器:", font=("Segoe UI", 9, "bold"), bg=self.card_bg, fg="#334155")
+        lbl_api.grid(row=4, column=0, sticky="w", pady=4)
+
+        self.entry_api = ttk.Entry(grid, font=("Consolas", 10), width=50)
+        self.entry_api.grid(row=4, column=1, sticky="ew", padx=(8, 8), pady=4)
+
+        btn_test_api = ttk.Button(grid, text="⚡ 測試連線 (21114)", width=18, style="Action.TButton",
+                                  command=lambda: self.test_server_port(self.entry_api.get().strip(), 21114, "API 伺服器"))
+        btn_test_api.grid(row=4, column=2, sticky="w", pady=4)
+
+        # 5. 版本號
         lbl_ver = tk.Label(grid, text="版本號 (Version):", font=("Segoe UI", 9, "bold"), bg=self.card_bg, fg="#334155")
-        lbl_ver.grid(row=4, column=0, sticky="w", pady=4)
+        lbl_ver.grid(row=5, column=0, sticky="w", pady=4)
 
         self.entry_ver = ttk.Entry(grid, font=("Consolas", 10), width=20)
-        self.entry_ver.grid(row=4, column=1, sticky="w", padx=(8, 8), pady=4)
+        self.entry_ver.grid(row=5, column=1, sticky="w", padx=(8, 8), pady=4)
 
         lbl_ver_hint = tk.Label(grid, text="* 儲存時將自動同步 Cargo.toml、pubspec.yaml 與 GitHub Actions 腳本",
                                 font=("Segoe UI", 8), fg="#64748B", bg=self.card_bg)
-        lbl_ver_hint.grid(row=4, column=1, sticky="e", padx=(0, 8), pady=4)
+        lbl_ver_hint.grid(row=5, column=1, sticky="e", padx=(0, 8), pady=4)
 
         grid.columnconfigure(1, weight=1)
 
@@ -349,6 +360,7 @@ class RustdeskToolApp(tk.Tk):
         self.entry_key.delete(0, tk.END)
         self.entry_id.delete(0, tk.END)
         self.entry_relay.delete(0, tk.END)
+        self.entry_api.delete(0, tk.END)
         self.log("已清空金鑰與伺服器輸入欄位（點擊『儲存修改』即可寫入檔案）", "WARN")
 
     def reload_config(self):
@@ -364,10 +376,12 @@ class RustdeskToolApp(tk.Tk):
             pub_key_m = re.search(r'pub const RS_PUB_KEY: &str = "(.*?)";', content)
             id_server_m = re.search(r'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[(?:"(.*?)")?\];', content)
             relay_server_m = re.search(r'pub const DEFAULT_RELAY_SERVER: &str = "(.*?)";', content)
+            api_server_m = re.search(r'pub const DEFAULT_API_SERVER: &str = "(.*?)";', content)
 
             pub_key = pub_key_m.group(1) if pub_key_m else ""
             id_server = (id_server_m.group(1) if id_server_m and id_server_m.group(1) else "")
             relay_server = relay_server_m.group(1) if relay_server_m else ""
+            api_server = api_server_m.group(1) if api_server_m else ""
 
             # 讀取版本號
             version = "1.5.1"
@@ -387,6 +401,9 @@ class RustdeskToolApp(tk.Tk):
             self.entry_relay.delete(0, tk.END)
             self.entry_relay.insert(0, relay_server)
 
+            self.entry_api.delete(0, tk.END)
+            self.entry_api.insert(0, api_server)
+
             self.entry_ver.delete(0, tk.END)
             self.entry_ver.insert(0, version)
 
@@ -400,6 +417,7 @@ class RustdeskToolApp(tk.Tk):
         pub_key = self.entry_key.get().strip()
         id_server = self.entry_id.get().strip()
         relay_server = self.entry_relay.get().strip()
+        api_server = self.entry_api.get().strip()
         version = self.entry_ver.get().strip()
 
         if not version:
@@ -418,6 +436,12 @@ class RustdeskToolApp(tk.Tk):
                              rendezvous_line, content)
             content = re.sub(r'pub const DEFAULT_RELAY_SERVER: &str = ".*?";',
                              f'pub const DEFAULT_RELAY_SERVER: &str = "{relay_server}";', content)
+            if 'pub const DEFAULT_API_SERVER:' in content:
+                content = re.sub(r'pub const DEFAULT_API_SERVER: &str = ".*?";',
+                                 f'pub const DEFAULT_API_SERVER: &str = "{api_server}";', content)
+            else:
+                content = re.sub(r'(pub const DEFAULT_RELAY_SERVER: &str = ".*?";)',
+                                 rf'\g<1>\npub const DEFAULT_API_SERVER: &str = "{api_server}";', content)
 
             with open(CONFIG_RS_PATH, "w", encoding="utf-8", newline="\n") as f:
                 f.write(content)
@@ -463,7 +487,7 @@ class RustdeskToolApp(tk.Tk):
 
             self.set_status("本地所有配置檔案儲存成功")
             if show_msg:
-                messagebox.showinfo("成功", f"設定已成功寫入所有檔案！\n\nPublic Key: {pub_key[:12]}...\nID 伺服器: {id_server}\n中繼伺服器: {relay_server}\n版本: {version}")
+                messagebox.showinfo("成功", f"設定已成功寫入所有檔案！\n\nPublic Key: {pub_key[:12]}...\nID 伺服器: {id_server}\n中繼伺服器: {relay_server}\nAPI 伺服器: {api_server}\n版本: {version}")
             return True
         except Exception as e:
             self.log(f"儲存設定發生錯誤: {e}", "ERROR")
@@ -492,19 +516,23 @@ class RustdeskToolApp(tk.Tk):
             messagebox.showwarning("警告", f"請先填入 {label} 位址！")
             return
 
+        clean_host = re.sub(r"^https?://", "", host).split("/")[0].split(":")[0].strip()
+        if not clean_host:
+            clean_host = host
+
         def _worker():
-            self.log(f"正在測試 {label} ({host}:{port}) 連線中...", "INFO")
+            self.log(f"正在測試 {label} ({clean_host}:{port}) 連線中...", "INFO")
             self.set_status(f"測試 {label} 連線中...")
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(3.5)
-                res = s.connect_ex((host, port))
+                res = s.connect_ex((clean_host, port))
                 s.close()
                 if res == 0:
-                    self.log(f"✅ {label} ({host}:{port}) TCP 連線成功！伺服器運作正常。", "SUCCESS")
+                    self.log(f"✅ {label} ({clean_host}:{port}) TCP 連線成功！伺服器運作正常。", "SUCCESS")
                     self.set_status(f"{label} 連線正常")
                 else:
-                    self.log(f"⚠️ {label} ({host}:{port}) 無法建立 TCP 連線 (錯誤代碼: {res})。請確認主機防火牆與服務狀態。", "WARN")
+                    self.log(f"⚠️ {label} ({clean_host}:{port}) 無法建立 TCP 連線 (錯誤代碼: {res})。請確認主機防火牆與服務狀態。", "WARN")
                     self.set_status(f"{label} 連線失敗 (Code {res})")
             except Exception as e:
                 self.log(f"❌ 測試 {label} 發生異常: {e}", "ERROR")

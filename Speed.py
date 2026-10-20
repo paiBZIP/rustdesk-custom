@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Speed.py - RustDesk 專屬網路連線、埠號檢測與雙機測速診斷工具
+Speed.py - RustDesk 專屬網路連線、通訊埠檢測與雙機測速診斷工具
 功能：
-  1. 檢測 RustDesk 伺服器（ID / 中繼）所有核心通訊埠（21115 ~ 21119）與延遲（Ping / Jitter）
-  2. A 電腦 ↔ B 電腦 端到端直連 / 中繼雙向頻寬實測（上傳 / 下載 Mbps、MB/s）
-  3. 密碼保護驗證（雙機輸入相同密碼即可一鍵連線測速）
-  4. 模擬各解析度（720p / 1080p / 2K / 4K）在不同畫質優先級（速度優先 / 均衡 / 畫質優先）下的頻寬佔用與操作反饋延遲
+  1. 伺服器設定管理：ID 伺服器 (hbbs)、中繼 (hbbr)、金鑰 (KEY) 皆可手動輸入並即時存檔至 speed.ini
+  2. 獨立全新測速 ID：開啟程式自動生成專屬 9 碼測速 ID (完全獨立於本機 RustDesk 正式 ID，不衝突不頂號)
+  3. 雙機極限測速：支援輸入對方 9 碼測速 ID (自動穿透尋址 / 局域網廣播尋址) 或直接輸入 IP 連線
+  4. 伺服器埠號診斷：檢測核心通訊埠（21115 ~ 21119）與延遲（Ping / Jitter）
+  5. 解析度畫質模擬：依實測頻寬與 RTT 評估 720p / 1080p / 2K / 4K 在不同畫質優先級下的流暢度
 """
 
 import os
@@ -19,6 +20,7 @@ import hashlib
 import secrets
 import threading
 import queue
+import configparser
 import urllib.request
 
 import tkinter as tk
@@ -36,16 +38,23 @@ except Exception:
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_RS_PATH = os.path.join(BASE_DIR, "libs", "hbb_common", "src", "config.rs")
+INI_PATH = os.path.join(BASE_DIR, "speed.ini")
 
-# 預設參數 (若讀不到檔案時之預設值)
-DEFAULT_ID_SERVER = ""
-DEFAULT_RELAY_SERVER = ""
-DEFAULT_PUB_KEY = ""
+# 預設參數
+DEFAULT_ID_SERVER = "vpn.xbmax.com"
+DEFAULT_RELAY_SERVER = "vpn.xbmax.com"
+DEFAULT_PUB_KEY = "k09QlRj3SkGwORP6Kg39KkOpRdbXGfoz3LN9QzfzXpk="
 DEFAULT_BENCHMARK_PORT = 21120
+DEFAULT_DISCOVERY_PORT = 21121
+DEFAULT_RENDEZVOUS_PORT = 21116
+DEFAULT_RELAY_PORT = 21117
 
 
+# ----------------------------------------------------
+# 設定與 INI 存檔模組
+# ----------------------------------------------------
 def read_config_defaults():
-    """從 config.rs 讀取當前專案金鑰與伺服器"""
+    """從 config.rs 讀取當前專案預設金鑰與伺服器"""
     id_server = DEFAULT_ID_SERVER
     relay_server = DEFAULT_RELAY_SERVER
     pub_key = DEFAULT_PUB_KEY
@@ -72,6 +81,191 @@ def read_config_defaults():
     return id_server, relay_server, pub_key
 
 
+def generate_new_test_id():
+    """隨機生成 9 碼純數字獨立測速 ID (100000000 ~ 999999999)，絕不佔用或修改正式 RustDesk ID"""
+    return str(secrets.randbelow(900000000) + 100000000)
+
+
+def format_id(id_str):
+    """格式化 ID 為標準 3-3-3 格式 (例如: 952 147 852)"""
+    s = re.sub(r"\s+", "", str(id_str or "")).strip()
+    if len(s) == 9:
+        return f"{s[0:3]} {s[3:6]} {s[6:9]}"
+    return s
+
+
+def load_ini_config():
+    """載入 speed.ini。若不存在則從 config.rs 與獨立生成新 ID，並自動儲存至 speed.ini"""
+    cfg = configparser.ConfigParser()
+    def_id_srv, def_relay_srv, def_key = read_config_defaults()
+
+    id_server = def_id_srv
+    relay_server = def_relay_srv
+    pub_key = def_key
+    my_id = ""
+    benchmark_port = DEFAULT_BENCHMARK_PORT
+    password = "rustdesk123"
+
+    if os.path.exists(INI_PATH):
+        try:
+            cfg.read(INI_PATH, encoding="utf-8")
+            if "RustDesk" in cfg:
+                id_server = cfg.get("RustDesk", "id_server", fallback=id_server)
+                relay_server = cfg.get("RustDesk", "relay_server", fallback=relay_server)
+                pub_key = cfg.get("RustDesk", "key", fallback=pub_key)
+            if "Tool" in cfg:
+                my_id = cfg.get("Tool", "my_id", fallback="")
+                benchmark_port = cfg.getint("Tool", "benchmark_port", fallback=benchmark_port)
+                password = cfg.get("Tool", "password", fallback=password)
+        except Exception:
+            pass
+
+    # 確保擁有獨立全新的測速 ID
+    if not my_id:
+        my_id = generate_new_test_id()
+        save_ini_config(id_server, relay_server, pub_key, my_id, benchmark_port, password)
+
+    return {
+        "id_server": id_server,
+        "relay_server": relay_server,
+        "key": pub_key,
+        "my_id": my_id,
+        "benchmark_port": benchmark_port,
+        "password": password,
+    }
+
+
+def save_ini_config(id_server, relay_server, key, my_id, benchmark_port=DEFAULT_BENCHMARK_PORT, password="rustdesk123"):
+    """儲存設定至 speed.ini"""
+    cfg = configparser.ConfigParser()
+    cfg["RustDesk"] = {
+        "id_server": str(id_server or "").strip(),
+        "relay_server": str(relay_server or "").strip(),
+        "key": str(key or "").strip(),
+    }
+    cfg["Tool"] = {
+        "my_id": str(my_id or "").strip(),
+        "benchmark_port": str(benchmark_port),
+        "password": str(password or "rustdesk123").strip(),
+    }
+    try:
+        with open(INI_PATH, "w", encoding="utf-8") as f:
+            cfg.write(f)
+        return True
+    except Exception as e:
+        print(f"Error saving to {INI_PATH}: {e}")
+        return False
+
+
+# ----------------------------------------------------
+# 輕量級 Protobuf 編解碼與 AddrMangle (相容 RustDesk hbbs 協議)
+# ----------------------------------------------------
+def encode_varint(val: int) -> bytes:
+    res = bytearray()
+    while val >= 0x80:
+        res.append((val & 0x7F) | 0x80)
+        val >>= 7
+    res.append(val & 0x7F)
+    return bytes(res)
+
+
+def decode_varint(data: bytes, offset: int = 0):
+    res = 0
+    shift = 0
+    idx = offset
+    while idx < len(data):
+        b = data[idx]
+        idx += 1
+        res |= (b & 0x7F) << shift
+        if not (b & 0x80):
+            return res, idx
+        shift += 7
+    return None, offset
+
+
+def parse_protobuf_fields(data: bytes):
+    idx = 0
+    fields = {}
+    while idx < len(data):
+        tag, idx = decode_varint(data, idx)
+        if tag is None:
+            break
+        fn = tag >> 3
+        wt = tag & 0x07
+        if wt == 0:
+            val, idx = decode_varint(data, idx)
+            if val is None:
+                break
+            fields.setdefault(fn, []).append((wt, val))
+        elif wt == 1:
+            val = data[idx:idx + 8]
+            idx += 8
+            fields.setdefault(fn, []).append((wt, val))
+        elif wt == 2:
+            length, idx = decode_varint(data, idx)
+            if length is None:
+                break
+            val = data[idx:idx + length]
+            idx += length
+            fields.setdefault(fn, []).append((wt, val))
+        elif wt == 5:
+            val = data[idx:idx + 4]
+            idx += 4
+            fields.setdefault(fn, []).append((wt, val))
+        else:
+            break
+    return fields
+
+
+def encode_register_peer(peer_id: str, serial: int = 0) -> bytes:
+    """編碼 RendezvousMessage -> RegisterPeer (UDP 註冊 ID 至 hbbs)"""
+    id_bytes = peer_id.encode("utf-8")
+    inner = bytearray()
+    inner.extend(b"\x0a" + encode_varint(len(id_bytes)) + id_bytes)
+    inner.extend(b"\x10" + encode_varint(serial))
+    msg = bytearray()
+    msg.extend(b"\x32" + encode_varint(len(inner)) + inner)
+    return bytes(msg)
+
+
+def encode_punch_hole_request(target_id: str, licence_key: str = "", udp_port: int = 0) -> bytes:
+    """編碼 RendezvousMessage -> PunchHoleRequest (向 hbbs 查詢指定 ID 的連線位址)"""
+    inner = bytearray()
+    id_b = target_id.encode("utf-8")
+    inner.extend(b"\x0a" + encode_varint(len(id_b)) + id_b)
+    if licence_key:
+        k_b = licence_key.encode("utf-8")
+        inner.extend(b"\x1a" + encode_varint(len(k_b)) + k_b)
+    ver_b = b"1.3.0"
+    inner.extend(b"\x32" + encode_varint(len(ver_b)) + ver_b)
+    if udp_port > 0:
+        inner.extend(b"\x38" + encode_varint(udp_port))
+    msg = bytearray()
+    msg.extend(b"\x42" + encode_varint(len(inner)) + inner)
+    return bytes(msg)
+
+
+def decode_addr_mangle(raw_bytes: bytes):
+    """解碼 RustDesk 的 AddrMangle 混淆位址為標準 (IP, Port)"""
+    if len(raw_bytes) > 16:
+        if len(raw_bytes) == 18:
+            port = int.from_bytes(raw_bytes[16:18], "little")
+            ip_parts = [raw_bytes[i:i + 2].hex() for i in range(0, 16, 2)]
+            return ":".join(ip_parts), port
+        return "0.0.0.0", 0
+    padded = raw_bytes.ljust(16, b"\x00")
+    number = int.from_bytes(padded, "little")
+    tm = (number >> 17) & 0xFFFFFFFF
+    ip_int = ((number >> 49) - tm) & 0xFFFFFFFF
+    ip_bytes = ip_int.to_bytes(4, "little")
+    ip_str = f"{ip_bytes[0]}.{ip_bytes[1]}.{ip_bytes[2]}.{ip_bytes[3]}"
+    port = (number & 0xFFFFFF) - (tm & 0xFFFF)
+    return ip_str, int(port & 0xFFFF)
+
+
+# ----------------------------------------------------
+# 網路工具函式
+# ----------------------------------------------------
 def get_local_ips():
     """取得本機所有局域網 IPv4 位址"""
     ips = []
@@ -94,7 +288,7 @@ def get_local_ips():
 
 
 def get_public_ip():
-    """非同步查詢本機對外公網 IP"""
+    """查詢本機對外公網 IP"""
     try:
         req = urllib.request.Request("https://api.ipify.org", headers={"User-Agent": "RustDeskSpeedTool"})
         with urllib.request.urlopen(req, timeout=3.5) as resp:
@@ -103,9 +297,6 @@ def get_public_ip():
         return "無法獲取 (或處於純內網)"
 
 
-# ----------------------------------------------------
-# 網路長度前綴訊息通訊協議 (Framed Protocol)
-# ----------------------------------------------------
 def recv_exact(sock, n):
     buf = bytearray()
     while len(buf) < n:
@@ -131,12 +322,15 @@ def recv_msg(sock):
     return recv_exact(sock, sz)
 
 
+# ----------------------------------------------------
+# 主視窗應用程式類別
+# ----------------------------------------------------
 class SpeedTestApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("RustDesk 網路診斷與連線測速工具 (Speed.py)")
-        self.geometry("980x860")
-        self.minsize(920, 760)
+        self.title("⚡ RustDesk 網路質量、通訊埠檢測與雙機極限測速 (Speed.py)")
+        self.geometry("1020x880")
+        self.minsize(960, 780)
 
         # 載入圖示
         icon_path = os.path.join(BASE_DIR, "res", "icon.ico")
@@ -147,24 +341,40 @@ class SpeedTestApp(tk.Tk):
                 pass
 
         self.msg_queue = queue.Queue()
+        self.running = True
+
+        # 讀取 speed.ini 設定與本機專屬獨立 ID
+        ini_data = load_ini_config()
+        self.id_server_val = ini_data["id_server"]
+        self.relay_server_val = ini_data["relay_server"]
+        self.pub_key_val = ini_data["key"]
+        self.my_id_val = ini_data["my_id"]
+        self.benchmark_port_val = ini_data["benchmark_port"]
+        self.password_val = ini_data["password"]
+
+        # 狀態控制
         self.server_socket = None
         self.is_server_listening = False
-        self.active_client_sock = None
+        self.hbbs_registered = False
+        self.key_visible = False
 
-        # 儲存測速結果 (供模擬解析度使用)
+        # 儲存測速結果
         self.measured_rtt = 0.0
         self.measured_upload_mbps = 0.0
         self.measured_download_mbps = 0.0
         self.measured_jitter = 0.0
 
-        id_srv, relay_srv, pub_key = read_config_defaults()
-        self.id_server_val = id_srv
-        self.relay_server_val = relay_srv
-        self.pub_key_val = pub_key
-
         self._setup_style()
         self._build_ui()
         self._poll_queue()
+
+        # 啟動後台服務執行緒
+        threading.Thread(target=self._lan_discovery_server, daemon=True).start()
+        threading.Thread(target=self._hbbs_register_loop, daemon=True).start()
+        threading.Thread(target=self._fetch_public_ip, daemon=True).start()
+
+        # 自動啟動伺服端等待連線 (開箱即用)
+        self.after(300, self.start_server_listen)
 
     def _setup_style(self):
         self.style = ttk.Style(self)
@@ -182,7 +392,6 @@ class SpeedTestApp(tk.Tk):
         self.style.configure("TNotebook", background=self.bg_color)
         self.style.configure("TNotebook.Tab", font=(font_family, 9, "bold"), padding=[14, 6])
 
-        # Treeview 核心行高與間距修復 (徹底解決 Windows 中文與高 DPI 下文字重疊擠壓問題)
         self.style.configure("Treeview",
                              font=(font_family, 10),
                              rowheight=34,
@@ -204,19 +413,71 @@ class SpeedTestApp(tk.Tk):
 
     def _build_ui(self):
         # 標題列
-        header = tk.Frame(self, bg="#1E293B", height=70)
+        header = tk.Frame(self, bg="#1E293B", height=48)
         header.pack(fill=tk.X, side=tk.TOP)
 
         t_lbl = tk.Label(header, text="⚡ RustDesk 網路質量、通訊埠檢測與雙機極限測速 (Speed.py)",
-                         font=("Microsoft JhengHei UI", 13, "bold"), fg="#FFFFFF", bg="#1E293B")
-        t_lbl.pack(anchor="w", padx=20, pady=(10, 2))
+                         font=("Microsoft JhengHei UI", 12, "bold"), fg="#FFFFFF", bg="#1E293B")
+        t_lbl.pack(side=tk.LEFT, padx=16, pady=8)
 
-        sub_lbl = tk.Label(header,
-                           text=f"ID 伺服器: {self.id_server_val} ｜ 中繼: {self.relay_server_val} ｜ 金鑰: {self.pub_key_val[:16]}...",
-                           font=("Microsoft JhengHei UI", 9), fg="#94A3B8", bg="#1E293B")
-        sub_lbl.pack(anchor="w", padx=20, pady=(0, 10))
+        self.lbl_header_badge = tk.Label(header, text="🟢 服務就緒", font=("Microsoft JhengHei UI", 9, "bold"),
+                                         fg="#4ADE80", bg="#0F172A", padx=8, pady=3, relief=tk.RIDGE)
+        self.lbl_header_badge.pack(side=tk.RIGHT, padx=16, pady=8)
 
-        # 頁籤容器 (標籤文字適度精簡，防止右側擠壓溢出)
+        # ----------------------------------------------------
+        # 伺服器與本機 ID 設定工具列 (支援手動輸入與存檔 *.ini)
+        # ----------------------------------------------------
+        config_bar = tk.Frame(self, bg="#0F172A", padx=16, pady=8)
+        config_bar.pack(fill=tk.X, side=tk.TOP)
+
+        # 第一行：伺服器手動設定
+        row1 = tk.Frame(config_bar, bg="#0F172A")
+        row1.pack(fill=tk.X, pady=(0, 6))
+
+        tk.Label(row1, text="🌐 ID 伺服器:", font=("Segoe UI", 9, "bold"), fg="#CBD5E1", bg="#0F172A").pack(side=tk.LEFT)
+        self.entry_top_id = ttk.Entry(row1, font=("Consolas", 9), width=20)
+        self.entry_top_id.insert(0, self.id_server_val)
+        self.entry_top_id.pack(side=tk.LEFT, padx=(4, 12))
+
+        tk.Label(row1, text="🔄 中繼伺服器:", font=("Segoe UI", 9, "bold"), fg="#CBD5E1", bg="#0F172A").pack(side=tk.LEFT)
+        self.entry_top_relay = ttk.Entry(row1, font=("Consolas", 9), width=20)
+        self.entry_top_relay.insert(0, self.relay_server_val)
+        self.entry_top_relay.pack(side=tk.LEFT, padx=(4, 12))
+
+        tk.Label(row1, text="🔑 金鑰 (KEY):", font=("Segoe UI", 9, "bold"), fg="#CBD5E1", bg="#0F172A").pack(side=tk.LEFT)
+        self.entry_top_key = ttk.Entry(row1, font=("Consolas", 9), width=22, show="*")
+        self.entry_top_key.insert(0, self.pub_key_val)
+        self.entry_top_key.pack(side=tk.LEFT, padx=(4, 4))
+
+        self.btn_toggle_key = ttk.Button(row1, text="👁️", width=3, style="Action.TButton", command=self.toggle_key_visibility)
+        self.btn_toggle_key.pack(side=tk.LEFT, padx=(0, 10))
+
+        btn_save = ttk.Button(row1, text="💾 儲存設定 (*.ini)", style="Success.TButton", command=self.save_settings_action)
+        btn_save.pack(side=tk.LEFT, padx=(6, 0))
+
+        # 第二行：本機獨立測速 ID 呈現與管理
+        row2 = tk.Frame(config_bar, bg="#0F172A")
+        row2.pack(fill=tk.X)
+
+        tk.Label(row2, text="🆔 本機專屬測速 ID:", font=("Segoe UI", 9, "bold"), fg="#94A3B8", bg="#0F172A").pack(side=tk.LEFT)
+        self.lbl_top_my_id = tk.Label(row2, text=format_id(self.my_id_val),
+                                      font=("Consolas", 13, "bold"), fg="#38BDF8", bg="#0F172A", padx=6)
+        self.lbl_top_my_id.pack(side=tk.LEFT)
+
+        btn_copy = ttk.Button(row2, text="📋 複製 ID", style="Action.TButton", command=self.copy_id_action)
+        btn_copy.pack(side=tk.LEFT, padx=(4, 6))
+
+        btn_regen = ttk.Button(row2, text="🎲 換新 ID", style="Action.TButton", command=self.regenerate_id_action)
+        btn_regen.pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Label(row2, text="（全新獨立測速專用 ID，不與本機 RustDesk 正式連線衝突）",
+                 font=("Microsoft JhengHei UI", 8), fg="#64748B", bg="#0F172A").pack(side=tk.LEFT)
+
+        self.lbl_srv_listen_badge = tk.Label(row2, text="🎧 監聽啟動中...",
+                                             font=("Segoe UI", 8, "bold"), fg="#FBBF24", bg="#0F172A")
+        self.lbl_srv_listen_badge.pack(side=tk.RIGHT)
+
+        # 頁籤容器
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
@@ -227,7 +488,7 @@ class SpeedTestApp(tk.Tk):
 
         # Tab 2: A 電腦 ↔ B 電腦 雙機實測
         self.tab_p2p = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.tab_p2p, text="  🚀 雙機頻寬實測  ")
+        self.notebook.add(self.tab_p2p, text="  🚀 雙機頻寬實測 (支援 ID/IP)  ")
         self._build_tab_p2p(self.tab_p2p)
 
         # Tab 3: 解析度畫質與操作反應模擬
@@ -262,7 +523,6 @@ class SpeedTestApp(tk.Tk):
                                   command=self.run_server_port_diagnostics)
         btn_test_all.pack(side=tk.LEFT, ipady=2)
 
-        # 樹狀表格呈現各埠號檢測結果 (共 6 筆，設定 height=6)
         columns = ("port", "proto", "name", "desc", "status", "ping")
         self.tree_ports = ttk.Treeview(parent, columns=columns, show="headings", height=6)
 
@@ -282,7 +542,6 @@ class SpeedTestApp(tk.Tk):
 
         self.tree_ports.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
-        # 預載埠號項目
         self.server_port_items = [
             ("21115", "TCP", "NAT 類型檢測", "hbbs NAT 探測與註冊服務", "待檢測", "-"),
             ("21116", "TCP", "ID 註冊/查詢", "hbbs 連線發起與打洞協商", "待檢測", "-"),
@@ -294,7 +553,6 @@ class SpeedTestApp(tk.Tk):
         for item in self.server_port_items:
             self.tree_ports.insert("", tk.END, values=item)
 
-        # 摘要卡片
         summary_frame = ttk.LabelFrame(parent, text="  伺服器網路品質分析摘要  ", padding=10)
         summary_frame.pack(fill=tk.X)
 
@@ -304,63 +562,78 @@ class SpeedTestApp(tk.Tk):
         self.lbl_srv_summary.pack(anchor="w")
 
     # ----------------------------------------------------
-    # TAB 2: A 電腦 ↔ B 電腦 雙機實測
+    # TAB 2: A 電腦 ↔ B 電腦 雙機實測 (支援對方 ID 或 IP)
     # ----------------------------------------------------
     def _build_tab_p2p(self, parent):
         intro_lbl = tk.Label(parent,
-                             text="💡 使用說明：A 電腦與 B 電腦皆開啟此程式。任選一台點擊「啟動伺服端」，另一台輸入對方的 IP 與密碼點擊「開始測速」即可！",
+                             text="💡 使用說明：A 電腦與 B 電腦皆開啟此程式。任一台直接輸入對方的「9 碼測速 ID」（或直接輸入 IP 位址），點擊「開始測速」即可自動尋址並直連實測！",
                              font=("Segoe UI", 9, "bold"), fg="#1E40AF", bg="#DBEAFE", padx=10, pady=6)
         intro_lbl.pack(fill=tk.X, pady=(0, 10))
 
         panes = tk.Frame(parent, bg=self.bg_color)
         panes.pack(fill=tk.BOTH, expand=True)
 
-        # 左側：作為伺服端 (等待連線)
-        frame_srv = ttk.LabelFrame(panes, text="  【角色 A】 等待連線端 (Server)  ", padding=12)
+        # 左側：作為伺服端 (等待連線端，展示本機身分)
+        frame_srv = ttk.LabelFrame(panes, text="  【本機身分】 等待連線端 (Server)  ", padding=12)
         frame_srv.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
 
+        # 本機 ID 突出展示
+        id_box = tk.Frame(frame_srv, bg="#EFF6FF", bd=1, relief=tk.SOLID, padx=10, pady=8)
+        id_box.pack(fill=tk.X, pady=(0, 8))
+
+        tk.Label(id_box, text="本機測速 ID (請提供給對端連線):", font=("Segoe UI", 9), fg="#1E40AF", bg="#EFF6FF").pack(anchor="w")
+        self.lbl_p2p_my_id = tk.Label(id_box, text=format_id(self.my_id_val),
+                                      font=("Consolas", 18, "bold"), fg="#1D4ED8", bg="#EFF6FF")
+        self.lbl_p2p_my_id.pack(anchor="w", pady=(2, 0))
+
         local_ips = get_local_ips()
-        tk.Label(frame_srv, text=f"本機區域網路 IP: {', '.join(local_ips)}", font=("Segoe UI", 9, "bold"),
+        tk.Label(frame_srv, text=f"區域網路 IP: {', '.join(local_ips)}", font=("Segoe UI", 9, "bold"),
                  bg=self.card_bg, fg="#0F172A").pack(anchor="w", pady=2)
 
         self.lbl_pub_ip = tk.Label(frame_srv, text="對外公網 IP: 查詢中...", font=("Segoe UI", 9),
                                    bg=self.card_bg, fg="#64748B")
         self.lbl_pub_ip.pack(anchor="w", pady=2)
-        threading.Thread(target=self._fetch_public_ip, daemon=True).start()
 
-        tk.Label(frame_srv, text="監聽埠號 (Port):", font=("Segoe UI", 9), bg=self.card_bg).pack(anchor="w", pady=(8, 2))
+        self.lbl_srv_hbbs_status = tk.Label(frame_srv, text="伺服器連線狀態: 正在連接 ID 伺服器...",
+                                            font=("Segoe UI", 9), bg=self.card_bg, fg="#F59E0B")
+        self.lbl_srv_hbbs_status.pack(anchor="w", pady=2)
+
+        tk.Label(frame_srv, text="監聽埠號 (Port):", font=("Segoe UI", 9), bg=self.card_bg).pack(anchor="w", pady=(6, 2))
         self.entry_listen_port = ttk.Entry(frame_srv, font=("Consolas", 10), width=15)
-        self.entry_listen_port.insert(0, str(DEFAULT_BENCHMARK_PORT))
+        self.entry_listen_port.insert(0, str(self.benchmark_port_val))
         self.entry_listen_port.pack(anchor="w")
 
-        tk.Label(frame_srv, text="連線密碼 (Password):", font=("Segoe UI", 9), bg=self.card_bg).pack(anchor="w", pady=(8, 2))
+        tk.Label(frame_srv, text="連線密碼 (Password):", font=("Segoe UI", 9), bg=self.card_bg).pack(anchor="w", pady=(6, 2))
         self.entry_srv_pwd = ttk.Entry(frame_srv, font=("Consolas", 10), width=20)
-        self.entry_srv_pwd.insert(0, "rustdesk123")
+        self.entry_srv_pwd.insert(0, self.password_val)
         self.entry_srv_pwd.pack(anchor="w")
 
         self.btn_listen = ttk.Button(frame_srv, text="🎧 啟動等待連線 (Listen)", style="Success.TButton",
-                                    command=self.toggle_server_listen)
-        self.btn_listen.pack(anchor="w", pady=(14, 0), ipady=3)
+                                     command=self.toggle_server_listen)
+        self.btn_listen.pack(anchor="w", pady=(12, 0), ipady=3)
 
         self.lbl_srv_status = tk.Label(frame_srv, text="狀態：尚未啟動", font=("Segoe UI", 9),
                                        fg="#64748B", bg=self.card_bg)
-        self.lbl_srv_status.pack(anchor="w", pady=(8, 0))
+        self.lbl_srv_status.pack(anchor="w", pady=(6, 0))
 
-        # 右側：作為客戶端 (發起連線)
-        frame_cli = ttk.LabelFrame(panes, text="  【角色 B】 發起測試端 (Client)  ", padding=12)
+        # 右側：作為客戶端 (連線對端發起測速)
+        frame_cli = ttk.LabelFrame(panes, text="  【連線對端】 發起測試端 (Client)  ", padding=12)
         frame_cli.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(6, 0))
 
-        tk.Label(frame_cli, text="目標電腦 IP 或主機名稱:", font=("Segoe UI", 9, "bold"), bg=self.card_bg).pack(anchor="w", pady=2)
-        self.entry_target_ip = ttk.Entry(frame_cli, font=("Consolas", 10), width=28)
-        self.entry_target_ip.insert(0, "127.0.0.1")
-        self.entry_target_ip.pack(anchor="w", pady=(0, 4))
+        tk.Label(frame_cli, text="目標電腦 ID 或 IP 位址:", font=("Segoe UI", 9, "bold"), bg=self.card_bg).pack(anchor="w", pady=2)
+        self.entry_target = ttk.Entry(frame_cli, font=("Consolas", 11, "bold"), width=26)
+        self.entry_target.insert(0, "")
+        self.entry_target.pack(anchor="w", pady=(0, 2))
 
-        tk.Label(frame_cli, text="目標埠號 (Port):", font=("Segoe UI", 9), bg=self.card_bg).pack(anchor="w", pady=(4, 2))
+        tk.Label(frame_cli, text="💡 可直接輸入對方的 9 碼測速 ID (如 952 147 852)，亦可輸入 IP 位址",
+                 font=("Microsoft JhengHei UI", 8), fg="#64748B", bg=self.card_bg).pack(anchor="w", pady=(0, 6))
+
+        tk.Label(frame_cli, text="目標埠號 (Port, 直連預設 21120):", font=("Segoe UI", 9), bg=self.card_bg).pack(anchor="w", pady=(2, 2))
         self.entry_target_port = ttk.Entry(frame_cli, font=("Consolas", 10), width=15)
         self.entry_target_port.insert(0, str(DEFAULT_BENCHMARK_PORT))
         self.entry_target_port.pack(anchor="w")
 
-        tk.Label(frame_cli, text="輸入連線密碼:", font=("Segoe UI", 9), bg=self.card_bg).pack(anchor="w", pady=(6, 2))
+        tk.Label(frame_cli, text="輸入對端連線密碼:", font=("Segoe UI", 9), bg=self.card_bg).pack(anchor="w", pady=(6, 2))
         self.entry_cli_pwd = ttk.Entry(frame_cli, font=("Consolas", 10), width=20)
         self.entry_cli_pwd.insert(0, "rustdesk123")
         self.entry_cli_pwd.pack(anchor="w")
@@ -404,7 +677,7 @@ class SpeedTestApp(tk.Tk):
     # TAB 3: 解析度畫質與操作反應模擬
     # ----------------------------------------------------
     def _build_tab_sim(self, parent):
-        tk.Label(parent, text="根據上方實際測得的「網路頻寬」與「延遲 (RTT)」，自動評估在各種解析度與畫質優先級下的表現：",
+        tk.Label(parent, text="根據實際測得的「網路頻寬」與「延遲 (RTT)」，自動評估在各種解析度與畫質優先級下的表現：",
                  font=("Segoe UI", 9, "bold"), fg="#1E293B", bg=self.bg_color).pack(anchor="w", pady=(0, 8))
 
         columns = ("res", "fps", "bitrate_req", "speed_mode", "balanced_mode", "quality_mode", "input_lag")
@@ -432,7 +705,6 @@ class SpeedTestApp(tk.Tk):
                                 command=self.update_resolution_simulation)
         btn_recalc.pack(anchor="w", pady=(0, 10))
 
-        # 建議面板
         rec_frame = ttk.LabelFrame(parent, text="  最佳連線優化建議 (Optimization Advice)  ", padding=12)
         rec_frame.pack(fill=tk.X)
 
@@ -441,17 +713,15 @@ class SpeedTestApp(tk.Tk):
                                    font=("Segoe UI", 9), justify=tk.LEFT, fg="#475569", bg=self.card_bg)
         self.lbl_advice.pack(anchor="w")
 
-        # 初始填充
         self.update_resolution_simulation()
 
     def update_resolution_simulation(self):
-        """依據測速指標重新計算各解析度評估"""
         for item in self.tree_sim.get_children():
             self.tree_sim.delete(item)
 
         bw = max(self.measured_upload_mbps, self.measured_download_mbps)
         if bw <= 0:
-            bw = 10.0  # 預設模擬 10 Mbps
+            bw = 10.0
         rtt = self.measured_rtt if self.measured_rtt > 0 else 25.0
 
         resolutions = [
@@ -473,7 +743,6 @@ class SpeedTestApp(tk.Tk):
             else:
                 return "⚠️ 頻寬不足"
 
-        # 預估滑鼠操作延遲 = RTT + 編碼(10ms) + 解碼渲染(8ms)
         est_lag = rtt + 18.0
 
         for name, fps, req, spd_req, bal_req, qlt_req in resolutions:
@@ -483,7 +752,6 @@ class SpeedTestApp(tk.Tk):
             lag_text = f"~{est_lag:.0f} ms"
             self.tree_sim.insert("", tk.END, values=(name, fps, f"{req:.1f} Mbps", s_rate, b_rate, q_rate, lag_text))
 
-        # 生成建議
         advice = []
         if rtt < 35:
             advice.append("🟢 延遲極低 (<35ms)：操作反饋極佳，如同本機體驗。推薦使用「畫質優先」享受清晰畫面！")
@@ -553,10 +821,270 @@ class SpeedTestApp(tk.Tk):
             self.after(50, self._poll_queue)
 
     # ----------------------------------------------------
+    # 設定管理與動作按鈕
+    # ----------------------------------------------------
+    def toggle_key_visibility(self):
+        self.key_visible = not self.key_visible
+        if self.key_visible:
+            self.entry_top_key.config(show="")
+            self.btn_toggle_key.config(text="🙈")
+        else:
+            self.entry_top_key.config(show="*")
+            self.btn_toggle_key.config(text="👁️")
+
+    def save_settings_action(self):
+        """使用者手動修改 ID 伺服器、中繼或 KEY 後，點擊儲存設定至 speed.ini"""
+        new_id_srv = self.entry_top_id.get().strip()
+        new_relay_srv = self.entry_top_relay.get().strip()
+        new_key = self.entry_top_key.get().strip()
+
+        self.id_server_val = new_id_srv
+        self.relay_server_val = new_relay_srv
+        self.pub_key_val = new_key
+
+        try:
+            port = int(self.entry_listen_port.get().strip())
+        except ValueError:
+            port = self.benchmark_port_val
+        pwd = self.entry_srv_pwd.get().strip() or self.password_val
+
+        ok = save_ini_config(new_id_srv, new_relay_srv, new_key, self.my_id_val, port, pwd)
+        if ok:
+            self.log(f"設定已成功存檔至 speed.ini (ID伺服器: {new_id_srv or '未設定'}, 中繼: {new_relay_srv or '未設定'})", "SUCCESS")
+            self.set_status("設定已成功儲存至 speed.ini！")
+            messagebox.showinfo("成功", f"設定已成功儲存至 speed.ini！\n\nID 伺服器: {new_id_srv}\n中繼伺服器: {new_relay_srv}\n本機測速 ID: {format_id(self.my_id_val)}")
+            # 同步更新 Tab 1 伺服器主機欄位
+            self.entry_srv_host.delete(0, tk.END)
+            self.entry_srv_host.insert(0, new_id_srv)
+            # 觸發一次心跳註冊
+            threading.Thread(target=self._send_hbbs_register, daemon=True).start()
+        else:
+            messagebox.showerror("失敗", "無法寫入 speed.ini，請確認目錄權限。")
+
+    def copy_id_action(self):
+        """一鍵複製本機測速 ID 到系統剪貼簿"""
+        self.clipboard_clear()
+        self.clipboard_append(self.my_id_val)
+        self.set_status(f"已複製測速 ID ({self.my_id_val}) 到剪貼簿！")
+        self.log(f"已複製本機測速 ID [{self.my_id_val}] 到剪貼簿", "INFO")
+
+    def regenerate_id_action(self):
+        """換取全新獨立測速 ID (完全不使用 RustDesk 本機 ID)"""
+        if not messagebox.askyesno("換新 ID 確認", "確定要更換本機測速專用 ID 嗎？\n\n更換後對端需要使用新 ID 進行連線。"):
+            return
+        new_id = generate_new_test_id()
+        self.my_id_val = new_id
+        save_ini_config(self.id_server_val, self.relay_server_val, self.pub_key_val, self.my_id_val,
+                        self.benchmark_port_val, self.password_val)
+
+        formatted = format_id(new_id)
+        self.lbl_top_my_id.config(text=formatted)
+        self.lbl_p2p_my_id.config(text=formatted)
+        self.log(f"已生成全新獨立測速 ID: {formatted}，並自動存檔至 speed.ini", "SUCCESS")
+        self.set_status(f"已更換全新測速 ID: {formatted}")
+        threading.Thread(target=self._send_hbbs_register, daemon=True).start()
+
+    # ----------------------------------------------------
+    # 背景服務：局域網廣播 Discovery 與 HBBS 註冊心跳
+    # ----------------------------------------------------
+    def _lan_discovery_server(self):
+        """在局域網 UDP 廣播埠監聽，支援雙機內網無伺服器秒級尋址"""
+        sock = None
+        for port in (DEFAULT_DISCOVERY_PORT, 21119):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("0.0.0.0", port))
+                sock = s
+                break
+            except Exception:
+                continue
+
+        if not sock:
+            return
+
+        while self.running:
+            try:
+                data, addr = sock.recvfrom(2048)
+                msg = json.loads(data.decode("utf-8", errors="ignore"))
+                cmd = msg.get("cmd")
+                target_id = str(msg.get("target_id") or "").strip()
+
+                if cmd == "SPEED_DISCOVER_PING" and (target_id == self.my_id_val or target_id == "*"):
+                    local_ips = get_local_ips()
+                    chosen_ip = local_ips[0] if local_ips else "127.0.0.1"
+                    try:
+                        port = int(self.entry_listen_port.get().strip())
+                    except Exception:
+                        port = DEFAULT_BENCHMARK_PORT
+                    reply = json.dumps({
+                        "cmd": "SPEED_DISCOVER_PONG",
+                        "id": self.my_id_val,
+                        "ip": chosen_ip,
+                        "port": port,
+                    }).encode("utf-8")
+                    sock.sendto(reply, addr)
+            except Exception:
+                pass
+
+    def _hbbs_register_loop(self):
+        """每 15 秒向 ID 伺服器 (hbbs:21116) 發送心跳註冊獨立測速 ID"""
+        while self.running:
+            self._send_hbbs_register()
+            time.sleep(15)
+
+    def _send_hbbs_register(self):
+        if not self.id_server_val or not self.my_id_val:
+            self.msg_queue.put(("call", lambda: self.lbl_srv_hbbs_status.config(
+                text="伺服器連線狀態: 尚未設定 ID 伺服器 (支援局域網 ID 尋址 / 直接 IP)", fg="#64748B"), (), {}))
+            return
+
+        host = self.id_server_val.split(":")[0].strip()
+        port = 21116
+        if ":" in self.id_server_val:
+            try:
+                port = int(self.id_server_val.split(":")[1])
+            except Exception:
+                pass
+
+        try:
+            target_addr = (socket.gethostbyname(host), port)
+            pkt = encode_register_peer(self.my_id_val)
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(2.0)
+            s.sendto(pkt, target_addr)
+            self.hbbs_registered = True
+            self.msg_queue.put(("call", lambda: self.lbl_srv_hbbs_status.config(
+                text=f"伺服器連線狀態: 🟢 已向 ID 伺服器 [{host}] 註冊本機測速 ID", fg="#16A34A"), (), {}))
+            s.close()
+        except Exception as e:
+            self.hbbs_registered = False
+            self.msg_queue.put(("call", lambda: self.lbl_srv_hbbs_status.config(
+                text=f"伺服器連線狀態: ⚠️ ID 伺服器連線異常 ({e})", fg="#DC2626"), (), {}))
+
+    # ----------------------------------------------------
+    # 尋址引擎：解析對方 ID 或 IP 位址
+    # ----------------------------------------------------
+    def resolve_target_address(self, raw_input):
+        """將輸入的字串解析為目標 (IP, Port)。支援 9 碼測速 ID 或直接 IP/域名"""
+        cleaned = re.sub(r"[\s\-]+", "", raw_input).strip()
+        if not cleaned:
+            raise Exception("請輸入對端的測速 ID 或 IP 位址！")
+
+        # 判斷是否為測速 ID (6 位數以上純數字)
+        if cleaned.isdigit() and len(cleaned) >= 6:
+            self.log(f"目標為測速 ID [{format_id(cleaned)}]，啟動雙模尋址 (局域網廣播 + ID 伺服器)...", "INFO")
+            self.set_status(f"正在尋址 ID: {format_id(cleaned)}...")
+
+            # 1. 優先嘗試局域網廣播探測 (極速 0.3s)
+            lan_ip, lan_port = self._probe_lan_peer(cleaned, timeout=0.35)
+            if lan_ip:
+                self.log(f"✅ [局域網尋址成功] 找到 ID [{format_id(cleaned)}]，內網位址: {lan_ip}:{lan_port}", "SUCCESS")
+                return lan_ip, lan_port
+
+            # 2. 若局域網未發現，透過 RustDesk ID 伺服器 (hbbs) 查詢公網打洞位址
+            if self.id_server_val:
+                self.log(f"向 ID 伺服器 [{self.id_server_val}] 查詢 ID [{format_id(cleaned)}] 的公網位址...", "INFO")
+                wan_ip, wan_port = self._query_hbbs_peer(cleaned, timeout=2.0)
+                if wan_ip and wan_ip != "0.0.0.0":
+                    self.log(f"✅ [ID 伺服器尋址成功] 找到 ID [{format_id(cleaned)}]，公網位址: {wan_ip}:{wan_port}", "SUCCESS")
+                    return wan_ip, wan_port
+
+            raise Exception(f"無法解析目標 ID [{format_id(cleaned)}]！\n\n可能原因：\n1. 對端尚未啟動 Speed.py 或未開啟等待連線\n2. 跨網際網路且未設定正確的 ID 伺服器\n\n提示：若雙方在同內網或知道 IP，亦可直接輸入對端 IP 進行連線！")
+
+        # 若包含非數字、小數點或冒號，視為直接 IP 或域名
+        target_port = DEFAULT_BENCHMARK_PORT
+        if ":" in cleaned and not cleaned.startswith("["):
+            parts = cleaned.split(":")
+            host = parts[0]
+            try:
+                target_port = int(parts[1])
+            except Exception:
+                pass
+        else:
+            host = cleaned
+            try:
+                target_port = int(self.entry_target_port.get().strip())
+            except Exception:
+                pass
+
+        self.log(f"使用直接 IP/主機名稱連線: {host}:{target_port}", "INFO")
+        return host, target_port
+
+    def _probe_lan_peer(self, target_id, timeout=0.35):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        s.settimeout(timeout)
+        req = json.dumps({"cmd": "SPEED_DISCOVER_PING", "target_id": target_id}).encode()
+        for port in (DEFAULT_DISCOVERY_PORT, 21119):
+            try:
+                s.sendto(req, ("<broadcast>", port))
+                s.sendto(req, ("255.255.255.255", port))
+            except Exception:
+                pass
+
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            try:
+                data, addr = s.recvfrom(2048)
+                resp = json.loads(data.decode("utf-8", errors="ignore"))
+                if resp.get("cmd") == "SPEED_DISCOVER_PONG" and str(resp.get("id")) == target_id:
+                    s.close()
+                    return resp.get("ip") or addr[0], int(resp.get("port") or DEFAULT_BENCHMARK_PORT)
+            except Exception:
+                pass
+        s.close()
+        return None, None
+
+    def _query_hbbs_peer(self, target_id, timeout=2.0):
+        if not self.id_server_val:
+            return None, None
+        host = self.id_server_val.split(":")[0].strip()
+        port = 21116
+        if ":" in self.id_server_val:
+            try:
+                port = int(self.id_server_val.split(":")[1])
+            except Exception:
+                pass
+
+        try:
+            target_addr = (socket.gethostbyname(host), port)
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(timeout)
+            req_pkt = encode_punch_hole_request(target_id, licence_key=self.pub_key_val, udp_port=DEFAULT_BENCHMARK_PORT)
+            s.sendto(req_pkt, target_addr)
+
+            t0 = time.time()
+            while time.time() - t0 < timeout:
+                try:
+                    data, _ = s.recvfrom(2048)
+                    parsed = parse_protobuf_fields(data)
+                    if 11 in parsed:
+                        ph_bytes = parsed[11][0][1]
+                        ph_fields = parse_protobuf_fields(ph_bytes)
+                        if 1 in ph_fields:
+                            mangled = ph_fields[1][0][1]
+                            ip, p = decode_addr_mangle(mangled)
+                            s.close()
+                            return ip, p if p > 0 else DEFAULT_BENCHMARK_PORT
+                except socket.timeout:
+                    break
+                except Exception:
+                    pass
+            s.close()
+        except Exception:
+            pass
+        return None, None
+
+    # ----------------------------------------------------
     # 邏輯 1: 伺服器通訊埠與延遲診斷
     # ----------------------------------------------------
     def run_server_port_diagnostics(self):
         host = self.entry_srv_host.get().strip() or self.id_server_val
+        if not host:
+            messagebox.showerror("錯誤", "請先於上方或目標伺服器主機欄位輸入伺服器 IP 或域名！")
+            return
+
         self.log("=" * 60, "INFO")
         self.log(f"開始檢測伺服器 [{host}] 所有核心通訊埠與延遲...", "INFO")
         self.set_status("伺服器埠號檢測中...")
@@ -601,7 +1129,6 @@ class SpeedTestApp(tk.Tk):
                             status_str = f"❌ 關閉/逾時 ({res})"
                             self.log(f"  Port {port}/TCP ({name}): 無法連線 (代碼 {res})", "ERROR")
                     else:
-                        # UDP
                         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                         s.settimeout(2.0)
                         s.sendto(b"\x00\x00", (host, port))
@@ -664,13 +1191,14 @@ class SpeedTestApp(tk.Tk):
             self.is_server_listening = True
             self.btn_listen.config(text="🛑 停止監聽 (Stop)")
             self.lbl_srv_status.config(text=f"狀態：正在通訊埠 {port} 監聽等待連線中...", fg="#16A34A")
+            self.lbl_srv_listen_badge.config(text=f"🟢 伺服監聽中 (Port {port})", fg="#4ADE80")
             self.log(f"已在 0.0.0.0:{port} 啟動測速伺服端，等待對端電腦連線...", "SUCCESS")
             self.set_status(f"伺服端監聽中 (Port {port})")
 
             threading.Thread(target=self._server_accept_loop, args=(pwd,), daemon=True).start()
         except Exception as e:
             self.log(f"啟動伺服端失敗: {e}", "ERROR")
-            messagebox.showerror("失敗", f"無法綁定監聽通訊埠 {port}:\n{e}")
+            self.lbl_srv_listen_badge.config(text="🔴 監聽未啟動", fg="#F87171")
 
     def stop_server_listen(self):
         self.is_server_listening = False
@@ -682,6 +1210,7 @@ class SpeedTestApp(tk.Tk):
             self.server_socket = None
         self.btn_listen.config(text="🎧 啟動等待連線 (Listen)")
         self.lbl_srv_status.config(text="狀態：已停止監聽", fg="#64748B")
+        self.lbl_srv_listen_badge.config(text="⚪ 已停止監聽", fg="#94A3B8")
         self.log("已停止測速伺服端監聽。", "INFO")
         self.set_status("已停止監聽")
 
@@ -691,7 +1220,6 @@ class SpeedTestApp(tk.Tk):
                 conn, addr = self.server_socket.accept()
                 self.log(f"收到來自 {addr[0]}:{addr[1]} 的連線請求，開始密碼驗證...", "INFO")
 
-                # 密碼挑戰驗證
                 salt = secrets.token_hex(8)
                 send_msg(conn, f"CHALLENGE:{salt}".encode("utf-8"))
 
@@ -711,8 +1239,6 @@ class SpeedTestApp(tk.Tk):
 
                 send_msg(conn, b"AUTH_OK")
                 self.log(f"✅ {addr[0]} 密碼驗證成功！開始測速傳輸...", "SUCCESS")
-
-                # 執行伺服端測速服務
                 self._handle_server_benchmark(conn, addr)
             except Exception:
                 break
@@ -736,7 +1262,6 @@ class SpeedTestApp(tk.Tk):
                 total_up += len(chunk)
             dt_up = max(time.time() - t0, 0.001)
 
-            # 回傳上傳統計給 Client
             up_mbps = (total_up * 8) / (dt_up * 1_000_000)
             send_msg(conn, json.dumps({"bytes": total_up, "sec": dt_up, "mbps": up_mbps}).encode())
 
@@ -750,8 +1275,7 @@ class SpeedTestApp(tk.Tk):
                 while time.time() - t0 < dur:
                     send_msg(conn, data_block)
                     total_down += len(data_block)
-                send_msg(conn, b"")  # 結束標記
-                # 等待客戶端確認接收完畢後再關閉連線，防止 Windows TCP RST (10054)
+                send_msg(conn, b"")
                 try:
                     recv_msg(conn)
                 except Exception:
@@ -763,14 +1287,12 @@ class SpeedTestApp(tk.Tk):
             self.log(f"伺服端測速中斷: {e}", "WARN")
 
     # ----------------------------------------------------
-    # 邏輯 3: A ↔ B 雙機實測 (Client Mode)
+    # 邏輯 3: A ↔ B 雙機實測 (Client Mode，支援對方 ID 或 IP)
     # ----------------------------------------------------
     def run_p2p_benchmark(self):
-        target_ip = self.entry_target_ip.get().strip()
-        try:
-            target_port = int(self.entry_target_port.get().strip())
-        except ValueError:
-            messagebox.showerror("錯誤", "目標埠號必須為數字！")
+        target_raw = self.entry_target.get().strip()
+        if not target_raw:
+            messagebox.showerror("錯誤", "請輸入對方的 9 位測速 ID 或 IP 位址！")
             return
 
         pwd = self.entry_cli_pwd.get().strip()
@@ -779,22 +1301,28 @@ class SpeedTestApp(tk.Tk):
             return
 
         self.btn_start_bench.config(state=tk.DISABLED)
-        self.lbl_cli_status.config(text="連線中...", fg="#2563EB")
+        self.lbl_cli_status.config(text="尋址與連線中...", fg="#2563EB")
         self.log("=" * 60, "INFO")
-        self.log(f"開始連線至目標電腦 [{target_ip}:{target_port}]...", "INFO")
-        self.set_status("正在連線對端電腦...")
+        self.log(f"發起連線至目標 [{target_raw}]...", "INFO")
+        self.set_status("正在解析目標位址...")
 
         def _worker():
             try:
+                # 執行 ID / IP 位址解析
+                target_ip, target_port = self.resolve_target_address(target_raw)
+
+                self.log(f"正在連線至目標電腦 [{target_ip}:{target_port}]...", "INFO")
+                self.set_status(f"連線至 {target_ip}:{target_port}...")
+
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(5.0)
+                s.settimeout(6.0)
                 s.connect((target_ip, target_port))
                 s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
                 # 1. 驗證密碼
                 chal = recv_msg(s)
                 if not chal or not chal.startswith(b"CHALLENGE:"):
-                    raise Exception("無法收到對端挑戰字串")
+                    raise Exception("無法收到對端挑戰字串，請確認對端也是使用本測速工具")
 
                 salt = chal.split(b":")[1].decode("utf-8")
                 token = hashlib.sha256((salt + pwd).encode("utf-8")).hexdigest()
@@ -802,7 +1330,7 @@ class SpeedTestApp(tk.Tk):
 
                 auth_res = recv_msg(s)
                 if auth_res != b"AUTH_OK":
-                    raise Exception("密碼驗證失敗！請確認雙方設定的密碼一致。")
+                    raise Exception("密碼驗證失敗！請確認雙方設定的連線密碼一致。")
 
                 self.log("✅ 密碼驗證通過！開始測試網路延遲與抖動...", "SUCCESS")
 
@@ -827,7 +1355,6 @@ class SpeedTestApp(tk.Tk):
                 self.log(f"  來回延遲: 平均 {avg_rtt:.1f}ms (最小: {min_rtt:.1f}ms, 最大: {max_rtt:.1f}ms)", "INFO")
                 self.log(f"  網路抖動 (Jitter): {jitter:.2f}ms", "INFO")
 
-                # 更新儀表板
                 self.msg_queue.put(("call", lambda: self.metric_rtt.config(text=f"{avg_rtt:.1f}"), (), {}))
                 self.msg_queue.put(("call", lambda: self.metric_jitter.config(text=f"{jitter:.1f}"), (), {}))
 
@@ -842,9 +1369,8 @@ class SpeedTestApp(tk.Tk):
                 while time.time() - t_up_start < test_duration:
                     send_msg(s, block)
                     total_sent += len(block)
-                send_msg(s, b"")  # 結束標記
+                send_msg(s, b"")
 
-                # 讀取 Server 統計
                 srv_stat_raw = recv_msg(s)
                 srv_stat = json.loads(srv_stat_raw.decode())
                 up_mbps = srv_stat["mbps"]
@@ -875,7 +1401,6 @@ class SpeedTestApp(tk.Tk):
                 self.log(f"  下載速率: {down_mbps:.2f} Mbps ({down_mbs:.2f} MB/s)", "SUCCESS")
                 self.msg_queue.put(("call", lambda: self.metric_download.config(text=f"{down_mbps:.1f}"), (), {}))
 
-                # 通知 Server 接收完畢
                 try:
                     send_msg(s, b"ACK_DONE")
                 except Exception:
@@ -890,11 +1415,11 @@ class SpeedTestApp(tk.Tk):
                 self.msg_queue.put(("call", lambda: self.lbl_cli_status.config(text="測速完成！", fg="#16A34A"), (), {}))
                 self.set_status("雙機測速完成")
 
-                # 自動切換到解析度評估頁籤並彈窗通知
                 def _notify_done():
                     self.notebook.select(self.tab_sim)
                     messagebox.showinfo("測速完成",
                                         f"雙機極限測速完成！\n\n"
+                                        f"連線對端: {target_raw}\n"
                                         f"來回延遲: {avg_rtt:.1f} ms\n"
                                         f"上傳速率: {up_mbps:.1f} Mbps\n"
                                         f"下載速率: {down_mbps:.1f} Mbps\n\n"
@@ -904,9 +1429,9 @@ class SpeedTestApp(tk.Tk):
             except Exception as e:
                 self.log(f"測速過程發生錯誤: {e}", "ERROR")
                 err_msg = str(e)
-                self.msg_queue.put(("call", lambda: self.lbl_cli_status.config(text=f"失敗: {err_msg}", fg="#DC2626"), (), {}))
+                self.msg_queue.put(("call", lambda: self.lbl_cli_status.config(text=f"失敗: {err_msg[:40]}...", fg="#DC2626"), (), {}))
                 self.set_status("測速失敗")
-                self.msg_queue.put(("call", lambda: messagebox.showerror("測速失敗", f"連線或測速失敗:\n{err_msg}"), (), {}))
+                self.msg_queue.put(("call", lambda: messagebox.showerror("測速失敗", f"連線或測速失敗:\n\n{err_msg}"), (), {}))
             finally:
                 self.msg_queue.put(("call", lambda: self.btn_start_bench.config(state=tk.NORMAL), (), {}))
 
